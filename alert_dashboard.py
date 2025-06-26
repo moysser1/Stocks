@@ -21,6 +21,15 @@ TELEGRAM_CHAT  = st.secrets.get("TELEGRAM_CHAT_ID", "")
 # Google service account JSON stored as a nested dict in secrets
 GCP_INFO      = st.secrets["gcp_service_account"]
 
+# ----------------- Sanitize Service Account Key -----------------
+# Some Streamlit secret entries may escape newlines as literal "\\n"
+private_key = GCP_INFO.get("private_key")
+if isinstance(private_key, str):
+    # Replace literal "\\n" with actual newlines
+    private_key = private_key.replace("\\n", "\n")
+    # Strip extra whitespace and reassign
+    GCP_INFO["private_key"] = private_key.strip()
+
 # Google Sheets URL (non-sensitive)
 SHEET_URL     = st.secrets["SHEET_URL"]
 
