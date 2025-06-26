@@ -35,11 +35,17 @@ def send_telegram(msg):
         requests.post(url, data={"chat_id": TELEGRAM_CHAT, "text": msg})
 
 # ----------------- Google Sheets Setup -----------------
-# Decode base64-encoded service account JSON, filter non-base64 chars
-gcp_b64 = st.secrets.get("GCP_KEY_B64", "")
-clean_b64 = re.sub(r"[^A-Za-z0-9+/=]", "", gcp_b64)
+# Decode base64-encoded service account JSON robustly
+raw_b64 = st.secrets.get("GCP_KEY_B64", "")
+# Remove any non-base64 characters
+clean_b64 = re.sub(r"[^A-Za-z0-9+/=]", "", raw_b64)
+# Add proper padding if needed
+missing_padding = len(clean_b64) % 4
+if missing_padding:
+    clean_b64 += '=' * (4 - missing_padding)
 try:
-    gcp_json = json.loads(base64.b64decode(clean_b64).decode("utf-8"))
+    decoded = base64.b64decode(clean_b64)
+    gcp_json = json.loads(decoded.decode("utf-8"))
 except Exception as e:
     st.error(f"Failed to decode GCP credentials: {e}")
     st.stop()
