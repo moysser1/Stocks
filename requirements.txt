@@ -1,0 +1,7 @@
+yfinance
+twilio
+gspread
+oauth2client
+streamlit-option-menu
+ta
+requests
