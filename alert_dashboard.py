@@ -1,7 +1,4 @@
-
 import streamlit as st
-import os
-import time
 import yfinance as yf
 import ta
 import gspread
@@ -10,23 +7,24 @@ from oauth2client.service_account import ServiceAccountCredentials
 from datetime import datetime, date
 from streamlit_option_menu import option_menu
 import pandas as pd
-import json
 import requests
 
-# Twilio credentials
+# -------------- Credentials & Config --------------
+# Twilio credentials (via Streamlit secrets)
 account_sid = st.secrets["TWILIO_ACCOUNT_SID"]
 auth_token = st.secrets["TWILIO_AUTH_TOKEN"]
 from_whatsapp_number = st.secrets["TWILIO_WHATSAPP_NUMBER"]
 admin_whatsapp_number = st.secrets["MY_WHATSAPP_NUMBER"]
+# Google Sheet URL for logging
 SHEET_URL = "https://docs.google.com/spreadsheets/d/1uLvKwximiHQTAdqvfG2YDB_wYeNH75OxN4_ms81zc2E/edit#gid=0"
 
-# Telegram settings
+# Telegram settings (optional)
 TELEGRAM_ENABLED = st.sidebar.checkbox("📣 Send Telegram Alerts", value=True)
-TELEGRAM_BOT_TOKEN = st.secrets.get("TELEGRAM_BOT_TOKEN", "your-telegram-bot-token")
-TELEGRAM_CHAT_ID = st.secrets.get("TELEGRAM_CHAT_ID", "your-chat-id")
+TELEGRAM_BOT_TOKEN = st.secrets.get("TELEGRAM_BOT_TOKEN", "")
+TELEGRAM_CHAT_ID = st.secrets.get("TELEGRAM_CHAT_ID", "")
 
-def send_telegram_alert(message):
-    if not TELEGRAM_ENABLED:
+def send_telegram_alert(message: str):
+    if not TELEGRAM_ENABLED or not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
         return
     try:
         telegram_url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
@@ -35,11 +33,14 @@ def send_telegram_alert(message):
     except Exception as e:
         st.error(f"Telegram Error: {e}")
 
-# Authenticate with Twilio
+# Initialize clients
 client = Client(account_sid, auth_token)
 
-# Google Sheets auth
-scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+# Google Sheets authentication (field-by-field via secrets)
+scope = [
+    "https://spreadsheets.google.com/feeds",
+    "https://www.googleapis.com/auth/drive"
+]
 creds_dict = {
     "type": st.secrets["GCP_TYPE"],
     "project_id": st.secrets["GCP_PROJECT_ID"],
@@ -56,12 +57,12 @@ creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
 sheet_client = gspread.authorize(creds)
 sheet = sheet_client.open_by_url(SHEET_URL).sheet1
 
-# Weekend detection
+# Weekend detection (Friday=4, Saturday=5 in Python)
 today_is_weekend = date.today().weekday() in [4, 5]
 
-# UI and auth
-lang = st.sidebar.selectbox("🌐 Language", ["English", "Arabic"])
-is_ar = lang == "Arabic"
+# UI setup and authentication
+ing = st.sidebar.selectbox("🌐 Language", ["English", "Arabic"])
+is_ar = ing == "Arabic"
 
 PASSWORD = "masar2025"
 if "authenticated" not in st.session_state:
@@ -75,7 +76,7 @@ if not st.session_state.authenticated:
     with col2:
         if st.button("Forgot Password?"):
             client.messages.create(
-                body="🔐 A user clicked 'Forgot Password' on your Streamlit stock alert dashboard.",
+                body="🔐 A user clicked 'Forgot Password' on your dashboard.",
                 from_=from_whatsapp_number,
                 to=admin_whatsapp_number
             )
@@ -86,7 +87,7 @@ if not st.session_state.authenticated:
         st.session_state.attempts += 1
         if st.session_state.attempts >= 3:
             client.messages.create(
-                body="⚠️ 3 failed login attempts on your stock alert dashboard.",
+                body="⚠️ 3 failed login attempts on your dashboard.",
                 from_=from_whatsapp_number,
                 to=admin_whatsapp_number
             )
@@ -95,11 +96,14 @@ if not st.session_state.authenticated:
 
 st.set_page_config(page_title="Stock Alerts", layout="centered")
 
+# RSI setting
 st.sidebar.subheader("📉 RSI Settings")
 default_rsi_threshold = st.sidebar.slider("RSI Alert Threshold", min_value=10, max_value=50, value=30, step=1)
 
+# Main menu tabs
 selected = option_menu("Main Menu", ["📊 Watchlist", "📈 Logs", "⚙️ Settings"], orientation="horizontal")
 
+# Initialize watchlist & states
 if "watchlist" not in st.session_state:
     st.session_state.watchlist = {"4250.SR": 21.5, "4161.SR": 23.0, "6001.SR": 34.0}
 if "whatsapp_number" not in st.session_state:
@@ -107,26 +111,28 @@ if "whatsapp_number" not in st.session_state:
 if "muted" not in st.session_state:
     st.session_state.muted = {}
 
+# Watchlist tab
 if selected == "📊 Watchlist":
-    st.title("📈 مراقبة الأسهم" if is_ar else "📈 Stock Alert Dashboard")
-    st.sidebar.header("➕ إضافة سهم" if is_ar else "➕ Add Stock to Watchlist")
-    symbol_input = st.sidebar.text_input("رمز السهم" if is_ar else "Ticker Symbol", "")
-    threshold_input = st.sidebar.number_input("سعر التنبيه" if is_ar else "Alert Price", min_value=0.0, step=0.1)
-    if st.sidebar.button("إضافة" if is_ar else "Add to Watchlist") and symbol_input:
+    st.title("📈 Stock Alert Dashboard" if not is_ar else "📈 مراقبة الأسهم")
+    st.sidebar.header("➕ Add Stock" if not is_ar else "➕ إضافة سهم")
+    symbol_input = st.sidebar.text_input("Ticker Symbol" if not is_ar else "رمز السهم", "")
+    threshold_input = st.sidebar.number_input("Alert Price (SAR)" if not is_ar else "سعر التنبيه", min_value=0.0, step=0.1)
+    if st.sidebar.button("Add" if not is_ar else "إضافة") and symbol_input:
         st.session_state.watchlist[symbol_input.upper()] = threshold_input
 
-    st.sidebar.subheader("📲 رقم واتساب" if is_ar else "📲 Alert Recipient")
-    new_number = st.sidebar.text_input("أدخل الرقم" if is_ar else "Enter WhatsApp Number", value=st.session_state.whatsapp_number)
-    if st.sidebar.button("تحديث الرقم" if is_ar else "Update Number"):
+    st.sidebar.subheader("📲 Alert Recipient" if not is_ar else "📲 رقم واتساب")
+    new_number = st.sidebar.text_input("Enter WhatsApp Number" if not is_ar else "أدخل الرقم", value=st.session_state.whatsapp_number)
+    if st.sidebar.button("Update" if not is_ar else "تحديث الرقم"):
         st.session_state.whatsapp_number = new_number
-        st.success("تم التحديث ✅" if is_ar else f"Updated to: {new_number}")
+        st.success(f"Updated to: {new_number}" if not is_ar else "تم التحديث ✅")
 
     for symbol, threshold in st.session_state.watchlist.items():
         st.markdown("---")
-        st.subheader(f"{symbol}")
+        st.subheader(symbol)
         ticker = yf.Ticker(symbol)
         hist = ticker.history(period="7d")
         price = hist["Close"].iloc[-1] if not hist.empty else 0.0
+        # Compute RSI
         hist["RSI"] = ta.momentum.RSIIndicator(hist["Close"], window=14).rsi()
         rsi_value = hist["RSI"].iloc[-1] if not hist["RSI"].isnull().all() else 50
 
@@ -140,20 +146,23 @@ if selected == "📊 Watchlist":
         if col4.button("🔕 Mute" if not muted else "🔔 Unmute", key=f"mute_{symbol}"):
             st.session_state.muted[symbol] = not muted
 
+        # Auto-alert logic (price+RSI & not muted & trading day)
         if price <= threshold and rsi_value <= default_rsi_threshold and not muted and not today_is_weekend:
             message = f"📉 {symbol} dropped to SAR {price:.2f} (RSI {rsi_value:.1f})"
             client.messages.create(body=message, from_=from_whatsapp_number, to=st.session_state.whatsapp_number)
             send_telegram_alert(message)
             now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             sheet.append_row([now, symbol, f"{price:.2f}", st.session_state.whatsapp_number, "Auto (RSI)"])
-            st.success("✅ RSI alert sent")
+            st.success("✅ RSI alert sent" if not is_ar else "✅ تم إرسال تنبيه RSI")
 
+# Logs tab
 elif selected == "📈 Logs":
-    st.title("📄 Alert Log")
+    st.title("📄 Alert Log" if not is_ar else "📄 سجل التنبيهات")
     records = sheet.get_all_records()
     st.dataframe(pd.DataFrame(records))
 
+# Settings tab
 elif selected == "⚙️ Settings":
-    st.title("⚙️ Settings")
-    st.markdown(f"🔗 [Google Sheet Logs]({SHEET_URL})")
+    st.title("⚙️ Settings" if not is_ar else "⚙️ الإعدادات")
+    st.markdown(f"🔗 [Open Logs]({SHEET_URL})")
     st.markdown(f"📲 Current WhatsApp: `{st.session_state.whatsapp_number}`")
