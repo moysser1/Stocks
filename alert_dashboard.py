@@ -4,6 +4,7 @@ import ta
 import gspread
 import base64
 import json
+import re
 from google.oauth2.service_account import Credentials
 from twilio.rest import Client
 from datetime import datetime, date
@@ -12,20 +13,13 @@ import pandas as pd
 import requests
 
 # ----------------- Load Secrets -----------------
-TWILIO_SID    = st.secrets["TWILIO_ACCOUNT_SID"]
-TWILIO_TOKEN  = st.secrets["TWILIO_AUTH_TOKEN"]
-WA_FROM       = st.secrets["TWILIO_WHATSAPP_NUMBER"]
-WA_TO         = st.secrets["MY_WHATSAPP_NUMBER"]
+TWILIO_SID   = st.secrets["TWILIO_ACCOUNT_SID"]
+TWILIO_TOKEN = st.secrets["TWILIO_AUTH_TOKEN"]
+WA_FROM      = st.secrets["TWILIO_WHATSAPP_NUMBER"]
+WA_TO        = st.secrets["MY_WHATSAPP_NUMBER"]
 
 TELEGRAM_TOKEN = st.secrets.get("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT  = st.secrets.get("TELEGRAM_CHAT_ID", "")
-
-# Base64-encoded GCP JSON service account
-raw_b64 = st.secrets["GCP_KEY_B64"]
-# Remove whitespace and newlines
-clean_b64 = "".join(raw_b64.split())
-# Decode to JSON
-gcp_info = json.loads(base64.b64decode(clean_b64).decode("utf-8"))
 
 # Google Sheets URL (non-sensitive)
 SHEET_URL = st.secrets.get("SHEET_URL")
@@ -40,16 +34,25 @@ def send_telegram(msg):
         url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
         requests.post(url, data={"chat_id": TELEGRAM_CHAT, "text": msg})
 
-# Google Sheets client
+# ----------------- Google Sheets Setup -----------------
+# Decode base64-encoded service account JSON, filter non-base64 chars
+gcp_b64 = st.secrets.get("GCP_KEY_B64", "")
+clean_b64 = re.sub(r"[^A-Za-z0-9+/=]", "", gcp_b64)
+try:
+    gcp_json = json.loads(base64.b64decode(clean_b64).decode("utf-8"))
+except Exception as e:
+    st.error(f"Failed to decode GCP credentials: {e}")
+    st.stop()
+
+# Authorize Google Sheets
 auth_scopes = ["https://www.googleapis.com/auth/spreadsheets"]
-creds = Credentials.from_service_account_info(gcp_info, scopes=auth_scopes)
+creds = Credentials.from_service_account_info(gcp_json, scopes=auth_scopes)
 gc    = gspread.authorize(creds)
 sheet = gc.open_by_url(SHEET_URL).sheet1
 
 # ----------------- App Configuration -----------------
-# Detect Saudi weekend (Fri=4, Sat=5)
-today = date.today().weekday()
-is_weekend = today in [4, 5]
+today = date.today().weekday()  # 0=Mon,...6=Sun
+is_weekend = today in [4, 5]    # Fri(4) & Sat(5)
 
 st.set_page_config(page_title="Stock Alerts", layout="centered")
 selected = option_menu(None, ["📊 Watchlist", "📈 Logs", "⚙️ Settings"], orientation="horizontal")
@@ -60,7 +63,7 @@ if "watchlist" not in st.session_state:
 if "muted" not in st.session_state:
     st.session_state.muted = set()
 
-# RSI threshold sidebar
+# RSI threshold in sidebar
 rsi_thr = st.sidebar.slider("RSI Alert Threshold", 10, 50, 30)
 
 # ----------------- Watchlist Tab -----------------
@@ -75,7 +78,7 @@ if selected == "📊 Watchlist":
         st.markdown("---")
         data = yf.Ticker(symbol).history(period="7d")["Close"]
         price = data.iloc[-1] if not data.empty else 0.0
-        rsi   = ta.momentum.RSIIndicator(data, 14).rsi().iloc[-1] if not data.empty else 0.0
+        rsi = ta.momentum.RSIIndicator(data, 14).rsi().iloc[-1] if not data.empty else 0.0
         st.line_chart(data, height=150)
         cols = st.columns(5)
         cols[0].metric("Symbol", symbol)
@@ -86,7 +89,7 @@ if selected == "📊 Watchlist":
         if cols[4].button("Unmute" if muted else "Mute", key=f"mute_{symbol}"):
             if muted: st.session_state.muted.remove(symbol)
             else:    st.session_state.muted.add(symbol)
-        # Auto alert
+        # Auto alert logic
         if price <= threshold and rsi <= rsi_thr and not muted and not is_weekend:
             msg = f"{symbol}: SAR {price:.2f}, RSI {rsi:.1f}"
             twilio.messages.create(body=msg, from_=WA_FROM, to=WA_TO)
