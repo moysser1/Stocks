@@ -18,20 +18,15 @@ WA_TO         = st.secrets["MY_WHATSAPP_NUMBER"]
 TELEGRAM_TOKEN = st.secrets.get("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT  = st.secrets.get("TELEGRAM_CHAT_ID", "")
 
-# Google service account JSON stored as a nested dict in secrets
-GCP_INFO      = st.secrets["gcp_service_account"]
-
-# ----------------- Sanitize Service Account Key -----------------
-# Some Streamlit secret entries may escape newlines as literal "\\n"
-private_key = GCP_INFO.get("private_key")
-if isinstance(private_key, str):
-    # Replace literal "\\n" with actual newlines
-    private_key = private_key.replace("\\n", "\n")
-    # Strip extra whitespace and reassign
-    GCP_INFO["private_key"] = private_key.strip()
+# Google service account info from secrets
+raw_info = st.secrets["gcp_service_account"]
+info = dict(raw_info)  # make a mutable copy
+# Sanitize private_key: replace literal "\\n" with real newlines
+if isinstance(info.get("private_key"), str):
+    info["private_key"] = info["private_key"].replace("\\n", "\n").strip()
 
 # Google Sheets URL (non-sensitive)
-SHEET_URL     = st.secrets["SHEET_URL"]
+SHEET_URL = st.secrets["SHEET_URL"]
 
 # ----------------- Initialize Clients -----------------
 # Twilio client
@@ -46,29 +41,21 @@ def send_telegram(msg):
         )
 
 # Google Sheets client
-auth_scopes  = ["https://www.googleapis.com/auth/spreadsheets"]
-creds        = Credentials.from_service_account_info(GCP_INFO, scopes=auth_scopes)
+auth_scopes = ["https://www.googleapis.com/auth/spreadsheets"]
+creds        = Credentials.from_service_account_info(info, scopes=auth_scopes)
 gc           = gspread.authorize(creds)
 sheet        = gc.open_by_url(SHEET_URL).sheet1
 
 # ----------------- App Configuration -----------------
-today        = date.today().weekday()  # 0=Mon,...6=Sun
-is_weekend   = today in [4, 5]         # Friday(4) & Saturday(5)
+today      = date.today().weekday()  # 0=Mon,...6=Sun
+is_weekend = today in [4, 5]         # Friday(4) & Saturday(5)
 
 st.set_page_config(page_title="Stock Alerts", layout="centered")
-selected     = option_menu(
-    None,
-    ["📊 Watchlist", "📈 Logs", "⚙️ Settings"],
-    orientation="horizontal"
-)
+selected = option_menu(None, ["📊 Watchlist", "📈 Logs", "⚙️ Settings"], orientation="horizontal")
 
 # Initialize state
 if "watchlist" not in st.session_state:
-    st.session_state.watchlist = {
-        "4250.SR": 21.5,
-        "4161.SR": 23.0,
-        "6001.SR": 34.0
-    }
+    st.session_state.watchlist = {"4250.SR": 21.5, "4161.SR": 23.0, "6001.SR": 34.0}
 if "muted" not in st.session_state:
     st.session_state.muted = set()
 
@@ -105,12 +92,7 @@ if selected == "📊 Watchlist":
                 st.session_state.muted.add(symbol)
 
         # Auto alert logic
-        if (
-            price <= threshold
-            and rsi <= rsi_thr
-            and not muted
-            and not is_weekend
-        ):
+        if price <= threshold and rsi <= rsi_thr and not muted and not is_weekend:
             msg = f"📉 {symbol}: SAR {price:.2f}, RSI {rsi:.1f}"
             twilio.messages.create(body=msg, from_=WA_FROM, to=WA_TO)
             send_telegram(msg)
